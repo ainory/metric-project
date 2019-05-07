@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xmlns:task="http://www.springframework.org/schema/task"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context.xsd http://www.springframework.org/schema/task http://www.springframework.org/schema/task/spring-task.xsd">
+
+
+    <context:property-placeholder location="classpath:metric-collector.properties" />
+
+    <context:component-scan base-package="com.mobigen.collector" />
+
+
+    <beans>
+        <bean class="com.fasterxml.jackson.databind.ObjectMapper"/>
+        <bean class="com.mobigen.collector.service.MetricProcessor" name="metricProcessor"/>
+
+
+        <task:executor id="collect-executor" pool-size="1"/>
+
+        <task:scheduler id="process-scheduler" pool-size="1"/>
+        <task:scheduled-tasks scheduler="process-scheduler" >
+            <task:scheduled ref="metricProcessor" method= "run" cron="${processor.schedule.cron}" />
+        </task:scheduled-tasks>
+
+        <task:executor id="db-executor" pool-size="50"/>
+
+        <bean id="hikariConfig" class="com.zaxxer.hikari.HikariConfig">
+            <property name="poolName" value="springHikariCP" />
+            <property name="connectionTestQuery" value="SELECT 1" />
+            <property name="driverClassName" value="${jdbc.driver}" />
+            <property name="jdbcUrl" value="${jdbc.url}" />
+            <property name="maximumPoolSize" value="${jdbc.maximumPoolSize}" />
+            <property name="connectionTimeout" value="${jdbc.connectionTimeout}" />
+            <!--<property name="autoCommit" value="false"/>-->
+            <property name="maxLifetime" value="30"/>
+
+            <property name="dataSourceProperties">
+                <props>
+                    <prop key="user">${jdbc.username}</prop>
+                    <prop key="password">${jdbc.password}</prop>
+                </props>
+            </property>
+        </bean>
+
+        <!-- HikariCP configuration -->
+        <bean id="dataSource" class="com.zaxxer.hikari.HikariDataSource" destroy-method="close">
+            <constructor-arg ref="hikariConfig" />
+        </bean>
+
+    </beans>
+
+
+
+
+</beans>
