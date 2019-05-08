@@ -39,11 +39,8 @@ public class MetricBuffer {
 
     public void addMetric(LocalDateTime dateTime, MetricInfo obj){
         Set<MetricInfo> metricInfoSet = this.metricMap.get(dateTime);
-//        System.out.println("같은 dateTime을 가진 객체: " + metricList);
 
         if(metricInfoSet != null && metricInfoSet.size() > 0){
-//            System.out.println("현재 같은 dt 가진 객체 개수: " + metricList.size());
-//            System.out.println("추가하려는 객체: " + obj);
             metricInfoSet.add(obj);
         } else {
             metricInfoSet = new HashSet<>();

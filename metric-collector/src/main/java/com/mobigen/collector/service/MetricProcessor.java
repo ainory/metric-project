@@ -26,23 +26,25 @@ public class MetricProcessor {
     @Autowired
     DBProcessor dbProcessor;
 
+    /**
+     * 데이터 처리 메소드
+     * 스케쥴러에 등록되어 주기적으로 실행
+     */
     public void run() {
         logger.info("데이터 처리 시작");
 
         try{
-            Long startTime = System.currentTimeMillis();
-
             // 처리하려는 map 가져오기
             Set<MetricInfo> metrics =  getFilteredMetricSet();
 
             // 데이터 DB 처리
-            if(metrics.size() > 0)
+            if(metrics.size() > 0){
+                logger.info("처리할 데이터 수(Set개수): " + metrics.size());
                 dbProcessor.processMetrics(metrics);
+            }
             else
                 logger.info("DB > 처리할 데이터가 존재하지 않습니다.");
 
-            Long endTime = System.currentTimeMillis();
-            logger.info("메트릭 처리 시간: " + (endTime - startTime) + "ms");
         } catch (Exception e){
             logger.error("데이터 처리 실패", e);
         }
@@ -90,7 +92,6 @@ public class MetricProcessor {
 
     /**
      * 일정 기한 지난 메트릭 데이터 삭제하는 메소드
-     * (Milliseconds 는 고려하지 않는다)
      */
     private void removeOldMetricInfo(){
         int removeCnt = 0;
@@ -98,11 +99,11 @@ public class MetricProcessor {
             Set<LocalDateTime> keySet = metricBuffer.getKeySet();
 
             if( keySet.size() > 0) {
-                LocalDateTime maxLimitTime = LocalDateTime.now().minusMinutes(EXP_MAX).withNano(0);
+                LocalDateTime maxLimitTime = LocalDateTime.now().minusMinutes(EXP_MAX);
 
                 Iterator iter = keySet.iterator();
                 while (iter.hasNext()) {
-                    LocalDateTime targetTime = ((LocalDateTime)iter.next()).withNano(0);
+                    LocalDateTime targetTime = ((LocalDateTime)iter.next());
                     // 기한 지난 데이터면 삭제
                     if (targetTime.isBefore(maxLimitTime)) {
                         iter.remove(); removeCnt++;
@@ -124,7 +125,12 @@ public class MetricProcessor {
     }
 
 
-    // 현재 keyset 정렬해서 보여줌
+    /**
+     * (테스트용 로그 출력 메소드)
+     * 현재 keyset 정렬해서 보여줌
+     *
+     * @return
+     */
     public String[] getSortedKeys_Test() {
         Set<LocalDateTime> s = metricBuffer.getKeySet();
 
@@ -143,7 +149,10 @@ public class MetricProcessor {
         return arr;
     }
 
-    // 시간별 데이터 모두 보여줌
+    /**
+     * (테스트용 로그 출력 메소드)
+     * 시간별 데이터 모두 보여줌
+     */
     public void showAll_Test(){
 
         String[] keys = getSortedKeys_Test();
@@ -156,14 +165,13 @@ public class MetricProcessor {
 //            for(LocalDateTime dt : map.keySet()){
                 System.out.println("------- " + key.toString() +" -> 현재개수: "+ metrics.size() +"개 ----------");
 
-    //            for(MetricInfo parsedMetric : map.get(dt)){
+                //            for(MetricInfo parsedMetric : map.get(dt)){
                 int sample = metrics.size();
                 if( sample > 3){
                     sample = 3;
                 }
                 Iterator iter = metrics.iterator();
                 for(int i = 0; i< sample ; i++){
-    //                logger.info(String.valueOf(parsedMetric));
                     logger.info(String.valueOf(iter.next()));
                 }
             }

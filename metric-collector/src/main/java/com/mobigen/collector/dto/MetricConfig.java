@@ -1,7 +1,5 @@
 package com.mobigen.collector.dto;
 
-import org.springframework.stereotype.Repository;
-
 public class MetricConfig {
     private String metric_name;
     private String table_name;
