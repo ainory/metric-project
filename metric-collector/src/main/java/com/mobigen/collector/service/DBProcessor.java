@@ -31,8 +31,8 @@ public class DBProcessor {
     @Autowired
     MetricDao metricDao;
 
-    List<MetricConfig> metricConfigs;
-    Map<String, TableConfig> tableConfigs;
+    private List<MetricConfig> metricConfigs;
+    private Map<String, TableConfig> tableConfigs;
 
     /**
      * Config 테이블 정보 가져와서 저장
@@ -169,7 +169,7 @@ public class DBProcessor {
                         } else {
                             // 이전에 모아뒀던 sql문 처리
                             if(bulkInsertList.size() > 0){
-                                sqls.add(createInsertSQL(tableName, colNameList, bulkInsertList)); totBulkCnt++;
+                                sqls.add(createInsertDuplicateSQL(tableName, colNameList, bulkInsertList)); totBulkCnt++;
                                 bulkInsertList.clear();
                             }
 
@@ -189,7 +189,7 @@ public class DBProcessor {
 
                     // 배치 설정
                     if(isSingleSql || (BATCH_SIZE > 0 && bulkCnt % BATCH_SIZE == 0)){
-                        sqls.add(createInsertSQL(tableName, colNameList, bulkInsertList)); totBulkCnt++;
+                        sqls.add(createInsertDuplicateSQL(tableName, colNameList, bulkInsertList)); totBulkCnt++;
                         bulkInsertList.clear();
                     }
 
@@ -197,7 +197,7 @@ public class DBProcessor {
 
                 // 배치 나머지
                 if (bulkInsertList.size() > 0) {
-                    sqls.add(createInsertSQL(tableName, colNameList, bulkInsertList)); totBulkCnt++;
+                    sqls.add(createInsertDuplicateSQL(tableName, colNameList, bulkInsertList)); totBulkCnt++;
                 }
 
             }
@@ -229,45 +229,33 @@ public class DBProcessor {
             for(String tableName : metrics.keySet()){
                 // 한 로우 단위로 DB작업 수행
                 for( Map.Entry<Map<String,String>,Map<String,String>> oneRow: metrics.get(tableName).entrySet()){
-                    String keys ="";
-                    String values ="";
-                    String rowTimestamp = null;
 
-                    // timestamp 제외 WHERE절에 사용될 구문 생성
-                    for(Map.Entry<String,String> keyEntry: oneRow.getKey().entrySet()){
-                        String colName = keyEntry.getKey();
-                        String colVal = keyEntry.getValue();
-                        // 날짜 형식 변환
-                        if("timestamp".equals(colName)){
-                            rowTimestamp = convertFormat(colVal);
-                            continue;
-                        }
-                        keys +=  " `" + colName + "`='" + colVal +"' AND";
-                    }
+                    // 현재 판단중인 데이터의 timestamp값(날짜 형식)
+                    String rowTimestamp = convertFormat(oneRow.getKey().get("timestamp"));
 
                     // 키 값을 기준(timestamp 제외)으로 조회하여 시간 정보 가져옴
-                    keys = keys.substring(0, keys.length() - 3);
-                    String selectSql = "SELECT SUBSTRING(date_format(timestamp, '%Y-%m-%d %H:%i:%S.%f'),1,23) timestamp" +
-                            " FROM " + tableName + " WHERE " + keys + " ORDER BY timestamp DESC LIMIT 1";
+                    Map<String, String> wheres = new HashMap<>();
+                    wheres.putAll(oneRow.getKey());
+                    wheres.remove("timestamp");
+                    String selectSql = createSelectTimestampSQL(tableName, wheres);
 
-                    // 기존에 등록된 시간보다 크다면 Update 진행
                     String selectTime = metricDao.selectTimestamp(selectSql);
                     selectCnt++;
+
+                    // 기존에 등록된 시간보다 크다면 Update 진행
                     if(selectTime != null && selectTime.length() > 0){
                         LocalDateTime oldDt = LocalDateTime.parse(selectTime, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS").withLocale(Locale.ENGLISH));
                         LocalDateTime rowDt = LocalDateTime.parse(rowTimestamp, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS"));
 
                         if(oldDt.isBefore(rowDt)) {
 //                            logger.info("update 작업");
-                            String sql = "UPDATE " + tableName + " SET ";
 
-                            for(Map.Entry<String,String> valEntry: oneRow.getValue().entrySet()){
-                                String colName = valEntry.getKey();
-                                String colVal = valEntry.getValue();
-                                values +=  " `" + colName + "`='" + colVal +"',";
-                            }
-                            values += "timestamp = '" + rowTimestamp +"'";
-                            sql += values + " WHERE " + keys + "AND timestamp = '" + selectTime +"'";
+                            // UPDATE 할 값에 현재 데이터의 timestamp 값도 추가
+                            Map<String, String> oneRowVals = new HashMap<>();
+                            oneRowVals.putAll(oneRow.getValue());
+                            oneRowVals.put("timestamp", rowTimestamp);
+                            wheres.put("timestamp", selectTime);
+                            String sql = createUpdateSQL(tableName, oneRowVals, wheres);
 
                             metricDao.executeQuery(sql);
                             updateCnt++;
@@ -277,32 +265,12 @@ public class DBProcessor {
                     // 같은 key를 가진 로우가 없다면 새로 Insert 진행
                     } else {
 //                        logger.info("insert 작업");
-                        String colNames = "";
-                        String colVals = "";
 
-                        // key로 쓰인 Map 순회
-                        for(Map.Entry<String,String> keyEntry: oneRow.getKey().entrySet()){
-                            String colName = keyEntry.getKey();
-                            String colVal = keyEntry.getValue();
-                            // 날짜 형식 변환
-                            if("timestamp".equals(colName)){
-                                colVal = convertFormat(colVal);
-                            }
-                            colNames +=  " `" + colName + "`,";
-                            colVals +=  "'" + colVal +"',";
-                        }
-                        // value로 쓰인 Map 순회
-                        for(Map.Entry<String,String> valEntry: oneRow.getValue().entrySet()){
-                            String colName = valEntry.getKey();
-                            String colVal = valEntry.getValue();
-                            colNames +=  " `" + colName + "`,";
-                            colVals +=  "'" + colVal +"',";
-                        }
-
-                        colNames = colNames.substring(0, colNames.length() -1);
-                        colVals = colVals.substring(0, colVals.length() -1);
-                        String sql = "INSERT INTO " + tableName + "(" + colNames +")"
-                                + "VALUES (" + colVals +")";
+                        Map<String,String> oneRowVals = new HashMap<>();
+                        oneRowVals.putAll(oneRow.getKey());
+                        oneRowVals.put("timestamp", rowTimestamp); // 날짜 형식 변환
+                        oneRowVals.putAll(oneRow.getValue());
+                        String sql = createInsertSQL(tableName, oneRowVals);
 
                         metricDao.executeQuery(sql);
                         insertCnt++;
@@ -323,6 +291,110 @@ public class DBProcessor {
         }
     }
 
+    /**
+     * DB의 timestamp값 조회하는 쿼리문 생성
+     * 가장 최근 시간으로 조회
+     *
+     * @param tableName
+     * @param wheres 조회하려는 조건값
+     * @return
+     */
+    private String createSelectTimestampSQL(String tableName, Map<String,String> wheres){
+        String selectSql ="";
+        try{
+            String where ="";
+
+            // WHERE절에 사용될 구문 생성
+            for(Map.Entry<String,String> whereEntry: wheres.entrySet()){
+                String colName = whereEntry.getKey();
+                String colVal = whereEntry.getValue();
+                where +=  " `" + colName + "`='" + colVal +"' AND";
+            }
+
+
+            where = where.substring(0, where.length() - 3);
+            selectSql = "SELECT SUBSTRING(date_format(timestamp, '%Y-%m-%d %H:%i:%S.%f'),1,23) timestamp" +
+                    " FROM " + tableName + " WHERE " + where + " ORDER BY timestamp DESC LIMIT 1";
+
+        } catch (Exception e){
+            logger.error("SELECT문 생성 실패", e);
+        }
+
+        return selectSql;
+    }
+
+    /**
+     * UPDATE 쿼리문 생성 메소드
+     *
+     * @param tableName
+     * @param oneRowVals UPDATE 할 값들: Map<필드명, 필드값>
+     * @param wheres UPDATE WHERE 절에 들어갈 값들: Map<필드명, 필드값>
+     * @return
+     */
+    private String createUpdateSQL(String tableName, Map<String, String> oneRowVals, Map<String, String> wheres){
+        String sql = "";
+
+        try {
+            String values ="";
+            for(Map.Entry<String,String> valEntry: oneRowVals.entrySet()){
+                String colName = valEntry.getKey();
+                String colVal = valEntry.getValue();
+                values +=  " `" + colName + "`='" + colVal +"',";
+            }
+
+            String where ="";
+            for(Map.Entry<String,String> whereEntry: wheres.entrySet()){
+                String colName = whereEntry.getKey();
+                String colVal = whereEntry.getValue();
+                where +=  " `" + colName + "`='" + colVal +"' AND";
+            }
+
+            values = values.substring(0, values.length() - 1);
+            where = where.substring(0, where.length() - 3);
+
+            sql = "UPDATE " + tableName + " SET " + values + " WHERE " + where;
+
+        } catch (Exception e){
+            logger.error("UPDATE문 생성 실패", e);
+        }
+
+        return sql;
+    }
+
+    /**
+     * INSERT 쿼리문 생성 메소드
+     *
+     * @param tableName
+     * @param oneRowVals INSERT 할 값들 : Map<필드명, 필드값>
+     * @return
+     */
+    private String createInsertSQL(String tableName, Map<String, String> oneRowVals){
+        String sql = "";
+
+        try{
+            String colNames = "";
+            String colVals = "";
+
+            for(Map.Entry<String,String> keyEntry: oneRowVals.entrySet()){
+                String colName = keyEntry.getKey();
+                String colVal = keyEntry.getValue();
+                colNames +=  " `" + colName + "`,";
+                colVals +=  "'" + colVal +"',";
+            }
+
+            colNames = colNames.substring(0, colNames.length() -1);
+            colVals = colVals.substring(0, colVals.length() -1);
+
+            sql = "INSERT INTO " + tableName + "(" + colNames +")"
+                    + "VALUES (" + colVals +")";
+
+        } catch (Exception e){
+            logger.error("INSERT문 생성 실패", e);
+        }
+
+
+        return sql;
+    }
 
     /**
      * 완전한 SQL 문 생성 메소드
@@ -332,7 +404,7 @@ public class DBProcessor {
      * @param colValList Bulk insert 구문 List< 한 로우에 들어가는 필드 List< Map<필드명, 필드값> >>
      * @return 완전한 INSERT 구문
      */
-    private String createInsertSQL(String tableName, List<String> colNameList, List<List<Map<String, String>>> colValList){
+    private String createInsertDuplicateSQL(String tableName, List<String> colNameList, List<List<Map<String, String>>> colValList){
         String sql = "";
         String values ="";
         Set<String> duplicateKeySet = new HashSet();
@@ -372,9 +444,8 @@ public class DBProcessor {
             sql += "INSERT INTO " + tableName + "(" + columnNames + ")" + " VALUES " + values
                     + " ON DUPLICATE KEY UPDATE " + duplicateKeys;
 
-            logger.info(sql);
         } catch (Exception e){
-            logger.error("SQL 문자열로 변환 실패", e);
+            logger.error("Insert-Duplicate문 생성 실패", e);
         }
 
         return sql;

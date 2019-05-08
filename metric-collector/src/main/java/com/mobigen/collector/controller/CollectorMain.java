@@ -18,6 +18,7 @@ public class CollectorMain {
         ApplicationContext ctx = new ClassPathXmlApplicationContext("/spring-config.xml");
         MetricCollector metricCollector = ctx.getBean(MetricCollector.class);
 
+        // 비동기적으로 실행
         metricCollector.run();
     }
 }
