@@ -22,18 +22,7 @@ public class DBUtil {
         Connection conn;
         try {
             conn = dataSource.getConnection();
-        } catch (Exception e) {
-            logger.error("Connection 얻기 실패");
-            throw e;
-        }
-
-        return conn;
-    }
-
-    public Connection getConnectionForSelect() throws Exception{
-        Connection conn;
-        try {
-            conn = dataSource.getConnection();
+//            conn.setAutoCommit(false);
         } catch (Exception e) {
             logger.error("Connection 얻기 실패");
             throw e;

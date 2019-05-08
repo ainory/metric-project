@@ -32,8 +32,7 @@
             <property name="jdbcUrl" value="${jdbc.url}" />
             <property name="maximumPoolSize" value="${jdbc.maximumPoolSize}" />
             <property name="connectionTimeout" value="${jdbc.connectionTimeout}" />
-            <!--<property name="autoCommit" value="false"/>-->
-            <property name="maxLifetime" value="30"/>
+            <property name="autoCommit" value="false"/>
 
             <property name="dataSourceProperties">
                 <props>

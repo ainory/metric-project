@@ -19,7 +19,6 @@ import java.util.*;
 
 @Service
 public class MetricCollector {
-
     Logger logger = LoggerFactory.getLogger(MetricCollector.class);
 
     @Value("${kafka.bootstrap.servers}")
@@ -127,19 +126,33 @@ public class MetricCollector {
                 try {
                     LocalDateTime dateTime = new Timestamp(Long.parseLong(metricInfo.getTimestamp())).toLocalDateTime();
 
-//                    if("HM_NODE_USAGE".equals(metricInfo.getTable_name())){
+//                    if("hm_fsnamesystem_progress".equals(metricInfo.getTable_name().toLowerCase())){
+//                        logger.info(String.valueOf(metricInfo));
+//                    }
+
                     // 시간 필터
                     if (dateTime.isAfter(LocalDateTime.now().minusMinutes(EXP_MAX))) {
 
                         metricBuffer.lock();
                         // 시간 별로 저장
                         metricBuffer.addMetric(dateTime, metricInfo);
+
+//                        // 가상 데이터 삽입(테스트용)
+//                        int testNum = new Random().nextInt(800);
+//                        for(int i = 0 ; i< testNum ; i++){
+//                            MetricInfo copyMetric = (MetricInfo) metricInfo.clone();
+//                            copyMetric.setSystem_seq(String.valueOf(i+1));
+//                            copyMetric.setProcess_seq(String.valueOf(i+1+1000));
+//
+//                            metricBuffer.addMetric(dateTime, copyMetric);
+//                        }
                     }
+
                 } catch (Exception e){
                     logger.error("데이터 공유객체에 저장 실패", e);
 
                     // 저장하려고 했던 객체 정보 에러로그로 남김
-                    logger.error("처리 중 에러 발생한 데이터 정보: \n" + String.valueOf(metricInfo));
+                    logger.error("처리 중 에러 발생한 데이터 정보: \n" + metricInfo);
                 } finally {
                     try{
                         if(metricBuffer.isHeldByCurrentThread()){

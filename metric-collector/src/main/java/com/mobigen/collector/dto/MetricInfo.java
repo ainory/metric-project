@@ -2,7 +2,7 @@ package com.mobigen.collector.dto;
 
 import java.util.Objects;
 
-public class MetricInfo {
+public class MetricInfo implements Cloneable {
     private String system_seq;
     private String process_seq;
     private String metric_name;
@@ -93,5 +93,8 @@ public class MetricInfo {
         }
     }
 
-
+    @Override
+    public Object clone() throws CloneNotSupportedException {
+        return super.clone();
+    }
 }

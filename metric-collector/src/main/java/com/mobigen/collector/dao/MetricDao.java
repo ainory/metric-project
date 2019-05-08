@@ -97,7 +97,7 @@ public class MetricDao {
         try {
             String sql = "SELECT * FROM METRIC_CONFIG";
 
-            conn = dbUtil.getConnectionForSelect();
+            conn = dbUtil.getConnection();
             stmt = conn.createStatement();
             rs = stmt.executeQuery(sql);
 
@@ -125,6 +125,7 @@ public class MetricDao {
         } catch (Exception e){
             logger.error("METRIC_CONFIG 테이블 정보 로드 실패", e);
         } finally {
+            dbUtil.commit(conn);
             close(stmt, conn);
         }
 
@@ -141,7 +142,7 @@ public class MetricDao {
         try {
             String sql = "SELECT * FROM TABLE_CONFIG";
 
-            conn = dbUtil.getConnectionForSelect();
+            conn = dbUtil.getConnection();
             stmt = conn.createStatement();
             rs = stmt.executeQuery(sql);
 
@@ -159,6 +160,7 @@ public class MetricDao {
         } catch (Exception e){
             logger.error("TABLE_CONFIG 테이블 정보 로드 실패", e);
         } finally {
+            dbUtil.commit(conn);
             close(stmt, conn);
         }
 
@@ -181,7 +183,7 @@ public class MetricDao {
         String timestamp = "";
 
         try {
-            conn = dbUtil.getConnectionForSelect();
+            conn = dbUtil.getConnection();
             stmt = conn.createStatement();
             rs = stmt.executeQuery(selectSql);
 
@@ -193,9 +195,11 @@ public class MetricDao {
             logger.error("Timestamp 조회 실패", e);
             errorLogManager.writeErrorSql(e, selectSql);
         } finally {
+            dbUtil.commit(conn);
             close(stmt, conn);
         }
 
         return timestamp;
     }
+
 }
