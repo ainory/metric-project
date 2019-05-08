@@ -14,7 +14,7 @@
     <beans>
         <bean class="com.fasterxml.jackson.databind.ObjectMapper"/>
         <bean class="com.mobigen.collector.service.MetricProcessor" name="metricProcessor"/>
-
+        <!--<bean class="com.mobigen.collector.service.MetricCollector" name="metricCollector"/>-->
 
         <task:executor id="collect-executor" pool-size="1"/>
 
@@ -42,6 +42,7 @@
                 </props>
             </property>
         </bean>
+
 
         <!-- HikariCP configuration -->
         <bean id="dataSource" class="com.zaxxer.hikari.HikariDataSource" destroy-method="close">
