@@ -9,7 +9,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.stereotype.Service;
 
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 @Service
@@ -69,6 +72,11 @@ public class MetricProcessor {
             // 메트릭 데이터 가져오기
             Map<LocalDateTime, Set<MetricInfo>> popMetricMap = metricBuffer.popMetricMap();
 
+            String[] timestamps = getSortedKeys(popMetricMap.keySet());
+            logger.info("처리하려는 Timestamp 정보: "
+                    +  timestamps[0]
+                    +" ~ " + timestamps[timestamps.length-1] );
+
             if(popMetricMap.size() > 0){
                 for( Set<MetricInfo> val :  popMetricMap.values()){
                     metricSet.addAll(val);
@@ -112,7 +120,7 @@ public class MetricProcessor {
 
                 /*if(removeCnt > 0) {
                     logger.info("******************** remove : "+ removeCnt +"key 삭제 ***************");
-                    getSortedKeys_Test();
+                    getSortedKeys();
                     showAll_Test();
                 }*/
 
@@ -130,9 +138,10 @@ public class MetricProcessor {
      * 현재 keyset 정렬해서 보여줌
      *
      * @return
+     * @param keySet
      */
-    public String[] getSortedKeys_Test() {
-        Set<LocalDateTime> s = metricBuffer.getKeySet();
+    public String[] getSortedKeys(Set keySet) {
+        Set<LocalDateTime> s = keySet;
 
         String[] arr = new String[0];
         if (s.size() > 0) {
@@ -140,7 +149,7 @@ public class MetricProcessor {
             arr = new String[n];
 
             for (LocalDateTime t : s) {
-                arr[--n] = t.toString();
+                arr[--n] = t.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
             }
 
             Arrays.sort(arr);
@@ -149,13 +158,14 @@ public class MetricProcessor {
         return arr;
     }
 
+
     /**
      * (테스트용 로그 출력 메소드)
      * 시간별 데이터 모두 보여줌
      */
     public void showAll_Test(){
 
-        String[] keys = getSortedKeys_Test();
+        String[] keys = getSortedKeys(metricBuffer.getKeySet());
         logger.info("keySet: " + Arrays.toString(keys));
 
         if (keys.length > 0) {
