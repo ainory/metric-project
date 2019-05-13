@@ -7,12 +7,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
-import javax.sql.DataSource;
 import java.sql.Connection;
 
 @Service
 public class DBUtil {
-    Logger logger = LoggerFactory.getLogger(MetricCollector.class);
+    Logger logger = LoggerFactory.getLogger(DBUtil.class);
 
     @Autowired
     @Qualifier("dataSource")

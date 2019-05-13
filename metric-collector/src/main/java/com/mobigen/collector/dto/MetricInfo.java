@@ -86,11 +86,17 @@ public class MetricInfo implements Cloneable {
     }
 
     public void setTimestamp(String timestamp) {
-        if("RRD".equals(this.table_name)){
-            this.timestamp = timestamp + "000";
-        }else {
-            this.timestamp = timestamp;
+        int strLength = timestamp.length();
+        final int TIMESTAMP_LEN = 13;
+
+        // timestamp 길이가 13미만인 경우 0으로 채우기
+        if(strLength < TIMESTAMP_LEN){
+            for(int i =0; i<TIMESTAMP_LEN-strLength; i++){
+                timestamp += "0";
+            }
         }
+
+        this.timestamp = timestamp;
     }
 
     @Override
