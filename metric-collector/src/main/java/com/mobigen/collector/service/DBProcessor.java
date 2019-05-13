@@ -533,6 +533,7 @@ public class DBProcessor {
                         metircNamePattern = Pattern.compile(config.getMetric_name());
                         isMatch = metircNamePattern.matcher(metric.getMetric_name()).matches()
                             && ("RRD".equals(metric.getTable_name()) || config.getTable_name().equals(metric.getTable_name()));
+                    // metric_name 일치 && table_name 일치
                     } else {
                         isMatch = config.getMetric_name().equals(metric.getMetric_name())
                                 && ("RRD".equals(metric.getTable_name()) || config.getTable_name().equals(metric.getTable_name()));
