@@ -74,7 +74,7 @@ public class DBProcessor {
         } catch (Exception e){
             logger.error("Table Config 불러오기 실패", e);
         }
-        
+
         return tableConfig;
     }
 
@@ -89,42 +89,36 @@ public class DBProcessor {
             try{
                 Long startTime = System.currentTimeMillis();
 
+                Map<String, String[]> insertMetrics = new HashMap<>();
+                Map<String, String[]> updateMetrics = new HashMap<>();
+
                 Long getMetricStart = System.currentTimeMillis();
-                Map<String, Map<Map<String,String>,Map<String,String>>> parsedMetric = getMetricMapForSql(metrics);
+                Map<String, String[]> metricRows = getMetricRowForSql(metrics);
                 Long getMetricEnd = System.currentTimeMillis();
                 logger.info("쿼리용 Map 변환 시간: " + (getMetricEnd - getMetricStart) + "ms");
 
-                // INSERT, UPDATE 용 데이터 분류
-                if(parsedMetric.size() > 0){
-                    Map<String, Map<Map<String,String>,Map<String,String>>> insertMap = new HashMap<>();
-                    Map<String, Map<Map<String,String>,Map<String,String>>> updateMap = new HashMap<>();
-
-                    int rowCnt = 0;
-                    // Table Config 정보와 비교하면서 분류
-                    for(Map.Entry<String, Map<Map<String,String>,Map<String,String>>> parsedMetricEntry : parsedMetric.entrySet()){
-                        String tableName = parsedMetricEntry.getKey();
-                        if("Y".equals(tableConfigs.get(tableName).getInsert_flag())){
-                            insertMap.put(parsedMetricEntry.getKey(), parsedMetricEntry.getValue());
-                        } else {
-                            updateMap.put(parsedMetricEntry.getKey(), parsedMetricEntry.getValue());
-                        }
-                        rowCnt += parsedMetricEntry.getValue().keySet().size();
+                // INSERT, UPDATE 구분
+                for(String keys : metricRows.keySet()){
+                    String tableName = keys.split(",")[0];
+                    if("Y".equals(tableConfigs.get(tableName).getInsert_flag())){
+                        insertMetrics.put(keys, metricRows.get(keys));
+                    } else {
+                        updateMetrics.put(keys, metricRows.get(keys));
                     }
-
-                    logger.info("DB처리 예정 개수: " + rowCnt);
-
-                    // DB 처리
-                    Long insertStart = System.currentTimeMillis();
-                    insertMetrics(insertMap);
-                    Long insertEnd = System.currentTimeMillis();
-                    updateMetrics(updateMap);
-                    Long updateEnd = System.currentTimeMillis();
-                    logger.info("insert 시간: " + (insertEnd - insertStart) + "ms");
-                    logger.info("update 시간: " + (updateEnd - insertEnd) + "ms");
-
-                    Long endTime = System.currentTimeMillis();
-                    logger.info("DB처리 시간: " + (endTime - startTime) + "ms");
                 }
+
+                // DB 처리
+                Long insertStart = System.currentTimeMillis();
+                insertMetrics(insertMetrics);
+                Long insertEnd = System.currentTimeMillis();
+                updateMetrics(updateMetrics);
+                Long updateEnd = System.currentTimeMillis();
+                logger.info("insert 시간: " + (insertEnd - insertStart) + "ms");
+                logger.info("update 시간: " + (updateEnd - insertEnd) + "ms");
+
+
+                Long endTime = System.currentTimeMillis();
+                logger.info("총 DB처리 시간: " + (endTime - startTime) + "ms");
 
             } catch ( Exception e) {
                 logger.error("DB 작업 실패", e);
@@ -136,11 +130,105 @@ public class DBProcessor {
     }
 
     /**
+     * 쿼리용으로 데이터 가공하는 메소드
+     *
+     * @param metrics
+     * @return Map< 키(tableName, sys_seq, proc_seq, timestamp + 동적필드구분자 ), Metric Value Array>
+     */
+    private Map<String,String[]> getMetricRowForSql(Set<MetricInfo> metrics) {
+        Map<String, List<String>> colsConfig = getColumnsByTable();
+
+        Map<String, String[]> metricRows = null;
+        try {
+
+            metricRows = new HashMap<>();
+            for (MetricInfo metric : metrics) {
+
+                for (MetricConfig config : metricConfigs) {
+//                    String tableName = metric.getTable_name();
+                    // RRD는 테이블명 다르기때문에 config에서 가져옴
+                    String tableName = config.getTable_name();
+                    String metricName = metric.getMetric_name();
+
+                    boolean isMatch;
+                    Pattern metircNamePattern = null;
+
+                    // metric_name 패턴 일치 && table_name 일치
+                    if ("Y".equals(config.getDynamic_flag())) {
+                        metircNamePattern = Pattern.compile(config.getMetric_name());
+                        isMatch = metircNamePattern.matcher(metricName).matches()
+                                && ("RRD".equals(tableName) || config.getTable_name().equals(tableName));
+                        // metric_name 일치 && table_name 일치
+                    } else {
+                        isMatch = config.getMetric_name().equals(metricName)
+                                && ("RRD".equals(tableName) || config.getTable_name().equals(tableName));
+                    }
+
+                    if (isMatch) {
+                        // 수집 여부 = 'Y'
+                        if ("Y".equals(config.getCollect_flag())) {
+
+                            // ------- 1. KEY
+                            String keys = tableName + "," + metric.getSystem_seq() + "," + metric.getProcess_seq() + "," + convertFormat(metric.getTimestamp());
+                            // 동적 수집 필드인 경우 구분명도 포함
+                            String dynamicColName = tableConfigs.get(config.getTable_name()).getDynamic_classify_column_name();
+                            String dynamicColVal = "";
+                            if ("Y".equals(config.getDynamic_flag())) {
+                                Matcher matcher = metircNamePattern.matcher(metric.getMetric_name());
+                                while (matcher.find()) {
+                                    dynamicColVal = matcher.group(1);
+                                }
+                                keys += "," + dynamicColVal;
+                            }
+
+                            // ------- 2. VALUE 세팅
+                            // config에서 가져온 필드명 순서와 같은 인덱스에 삽입
+                            List<String> columnInfo = colsConfig.get(tableName);
+                            String[] vals = metricRows.get(keys);
+                            if (vals == null || vals.length == 0) {
+                                vals = new String[columnInfo.size()];
+                                Arrays.fill(vals,null);
+                            }
+                            // key에 해당하는 값
+                            int metricIdx = columnInfo.indexOf("system_seq");
+                            vals[metricIdx] = metric.getSystem_seq();
+                            metricIdx = columnInfo.indexOf("process_seq");
+                            vals[metricIdx] = metric.getProcess_seq();
+                            metricIdx = columnInfo.indexOf("timestamp");
+                            vals[metricIdx] = convertFormat(metric.getTimestamp());
+                            // metric 값
+                            metricIdx = columnInfo.indexOf(config.getColumn_name()); // metricName X (∵ 동적필드인 경우 이름 다름, config에서 가져오기)
+                            vals[metricIdx] = metric.getMetric_value();
+                            // 동적필드 구분자 값
+                            if(!"".equals(dynamicColVal)){
+                                metricIdx = columnInfo.indexOf(dynamicColName);
+                                vals[metricIdx] = dynamicColVal;
+                            }
+
+
+                            // ------ 3. key, value 삽입
+                            metricRows.put(keys, vals);
+
+                            break;
+                        }
+                    }
+                }
+
+            }
+        } catch (Exception e) {
+            logger.info("INSERT 작업 실패", e);
+
+            logger.info("INSERT 실패한 Metric 정보: \n" + metrics);
+        }
+        return metricRows;
+    }
+
+    /**
      * INSERT 작업 수행 메소드
      *
-     * @param metrics INSERT 할 메트릭 정보들 ( Map<테이블명, Map<키, 벨류>> )
+     * @param metrics INSERT 할 메트릭 정보들
      */
-    private void insertMetrics(Map<String, Map<Map<String, String>, Map<String, String>>> metrics) {
+    private void insertMetrics(Map<String, String[]> metrics) {
         if(metrics != null && metrics.size() > 0){
 
             List<String> sqls = new ArrayList<>();
@@ -148,73 +236,95 @@ public class DBProcessor {
             int totRowCnt = 0;
 
             Map<String, List<String>> colsConfig = getColumnsByTable();
+            Map<String, List<String>> bulkinsertMap = new HashMap<>();
 
             try{
-                // 테이블 단위로 쿼리문 생성( ∵ 배치)
-                for(String tableName : metrics.keySet()){
-                    List<List< Map<String, String> >> bulkInsertList = new ArrayList<>();
-                    int bulkCnt = 0;
 
-                    // Metric Config에서 테이블명으로 필드 리스트 가져오기
+                for(Map.Entry<String,String[]> metricRow: metrics.entrySet()) {
+                    String tableName = metricRow.getKey().split(",")[0];
                     List<String> colNameList = colsConfig.get(tableName);
+                    String[] colValList = metricRow.getValue();
 
-                    // 한 로우에 해당하는 값 생성 - List<Map<String, String>> = 한 로우에 들어갈 필드(이름, 값)들로 이뤄진 리스트
-                    // ∵ duplicated key 관리
-                    boolean isSingleSql = false;
-                    List<Map<String, String>> oneRow;
-                    for(Map.Entry<Map<String,String>,Map<String,String>> keyValCols : metrics.get(tableName).entrySet()){
-                        oneRow = new ArrayList<>();
-                        // 테이블에 들어가야하는 필드 모두 체크 (bulk insert - values 순서 보장)
-                        for(String colName : colNameList){
-                            String val;
-                            // 키로 사용했던 Map 체크
-                            if( keyValCols.getKey().get(colName) != null){
-                                val = keyValCols.getKey().get(colName);
-                                // 날짜 형식 변환
-                                if("timestamp".equals(colName)){
-                                    val = convertFormat(val);
-                                }
-
-                            // 값으로 사용했던 Map 체크
-                            } else if(keyValCols.getValue().get(colName) != null ){
-                                val = keyValCols.getValue().get(colName);
-
-                            // 두 곳에서 모두 못찾았다면 null 값으로 채우기
-                            } else {
-                                // 이전에 모아뒀던 sql문 처리
-                                if(bulkInsertList.size() > 0){
-                                    sqls.add(createInsertDuplicateSQL(tableName, colNameList, bulkInsertList)); totBulkCnt++;
-                                    bulkInsertList.clear();
-                                }
-
-                                // null 있는 로우는 bulk insert X
-                                isSingleSql = true;
-                                val = "null";
+                    // 단일 sql문 생성- null 이 포함되어 있는경우
+                    if(Arrays.asList(colValList).contains(null)){
+                        String colNames ="";
+                        String colVals = "";
+                        String duplicateKeys = "";
+                        for(int i = 0; i < colNameList.size() ; i++) {
+                            colNames +=  " `" + colNameList.get(i) + "`,";
+                            colVals +=  (colValList[i] == null )? colValList[i] +"," : "'" + colValList[i] +"',";
+                            if(colValList[i] != null){
+                                duplicateKeys += " `" + colNameList.get(i) + "`=VALUES(`" +  colNameList.get(i) +"`),";
                             }
-
-                            Map<String, String> colNameVal = new HashMap<>();
-                            colNameVal.put(colName, val);
-
-                            oneRow.add(colNameVal);
                         }
 
-                        bulkInsertList.add(oneRow);
-                        bulkCnt ++;
-                        totRowCnt++;
+                        colNames = colNames.substring(0, colNames.length()-1);
+                        colVals = colVals.substring(0, colVals.length()-1);
+                        duplicateKeys = duplicateKeys.substring(0, duplicateKeys.length()-1);
+                        String sql = "INSERT INTO " + tableName + "(" + colNames + ")" + " VALUES (" + colVals +")"
+                                + " ON DUPLICATE KEY UPDATE " + duplicateKeys;
 
-                        // 배치 설정
-                        if(isSingleSql || (BATCH_SIZE > 0 && bulkCnt % BATCH_SIZE == 0)){
-                            sqls.add(createInsertDuplicateSQL(tableName, colNameList, bulkInsertList)); totBulkCnt++;
-                            bulkInsertList.clear();
+                        sqls.add(sql);
+
+                    // bulk insert 문을 위한 value 문자열 생성
+                    } else {
+                        String colVals = "";
+                        for(String val : colValList){
+                            colVals +=  "'" + val +"',";
                         }
-
+                        colVals = colVals.substring(0, colVals.length()-1);
+                        List<String> valueList = bulkinsertMap.get(tableName);
+                        if(valueList == null || valueList.size() == 0){
+                            valueList = new ArrayList<>();
+                        }
+                        valueList.add(colVals);
+                        bulkinsertMap.put(tableName, valueList);
                     }
+                    totRowCnt++;
+                }
 
-                    // 배치 나머지
-                    if (bulkInsertList.size() > 0) {
-                        sqls.add(createInsertDuplicateSQL(tableName, colNameList, bulkInsertList)); totBulkCnt++;
+                // bulk insert 문 생성
+                if(bulkinsertMap.size() > 0){
+                    for(Map.Entry<String, List<String>> bulkinsert : bulkinsertMap.entrySet()){
+                        String tableName = bulkinsert.getKey();
+                        List<String> colNameList = colsConfig.get(tableName);
+                        List<String> colValList = bulkinsert.getValue();
+
+                        // Column 명 리스트, duplicated Key 구문 생성
+                        String colNames ="";
+                        String duplicateKeys ="";
+                        for(int i = 0; i < colNameList.size() ; i++) {
+                            colNames +=  " `" + colNameList.get(i) + "`,";
+                            duplicateKeys += " `" + colNameList.get(i) + "`=VALUES(`" +  colNameList.get(i) +"`),";
+                        }
+                        colNames = colNames.substring(0, colNames.length()-1);
+                        duplicateKeys = duplicateKeys.substring(0, duplicateKeys.length()-1);
+
+                        int bulkCnt = 1;
+                        String colVals = "";
+                        for(String values: colValList){
+                            colVals +="(" + values + "),";
+
+                            // 배치 적용
+                            if(bulkCnt++ % BATCH_SIZE == 0){
+                                colVals = colVals.substring(0, colVals.length()-1);
+                                String sql = "INSERT INTO " + tableName + "(" + colNames + ")" + " VALUES " + colVals
+                                + " ON DUPLICATE KEY UPDATE " + duplicateKeys;
+                                sqls.add(sql);
+                                totBulkCnt++;
+                                // 초기화
+                                colVals = "";
+                            }
+                        }
+                        // 나머지 요소 배치 적용
+                        if(colVals.length() > 0){
+                            colVals = colVals.substring(0, colVals.length()-1);
+                            String sql = "INSERT INTO " + tableName + "(" + colNames + ")" + " VALUES " + colVals
+                                    + " ON DUPLICATE KEY UPDATE " + duplicateKeys;
+                            totBulkCnt++;
+                            sqls.add(sql);
+                        }
                     }
-
                 }
 
                 logger.info("(INSERT) 총 처리 예정 ROW : " + totRowCnt);
@@ -226,243 +336,156 @@ public class DBProcessor {
             } catch (Exception e){
                 logger.info("INSERT 작업 실패", e);
 
-                logger.info("INSERT 실패한 Metric 정보: \n" + metrics);
+                logger.info("INSERT 실패한 Metric 정보: \n" + getErrorMetricInfo(metrics));
             }
         }
 
     }
+
 
     /**
      * UPDATE 작업 수행 메소드
      *
      * @param metrics UPDATE 할 메트릭 정보들 ( Map<테이블명, Map<키, 벨류>> )
      */
-    private void updateMetrics(Map<String, Map<Map<String, String>, Map<String, String>>> metrics) {
+    private void updateMetrics(Map<String, String[]> metrics) {
         int updateCnt = 0;
         int insertCnt = 0;
         int selectCnt = 0;
+        int passCnt = 0;
+
+        Map<String, List<String>> colsConfig = getColumnsByTable();
 
         try{
-            for(String tableName : metrics.keySet()){
-                // 한 로우 단위로 DB작업 수행
-                for( Map.Entry<Map<String,String>,Map<String,String>> oneRow : metrics.get(tableName).entrySet()){
+            // 가장 최신 timestamp를 가진 요소만 선택
+            Map<String, String> resKey = new HashMap<>();
+            for(String keys : metrics.keySet()) {
+                String[] keyArr = keys.split(",");
+                String anotherKey = keyArr[0]+","+keyArr[1]+","+keyArr[2];
+                if(keyArr.length>4) anotherKey += ","+keyArr[4];
+                String timestamp = keyArr[3];
 
-                    // 현재 판단중인 데이터의 timestamp값 (날짜 형식)
-                    String rowTimestamp = convertFormat(oneRow.getKey().get("timestamp"));
-
-                    // 키 값을 기준(timestamp 제외)으로 조회하여 시간 정보 가져옴
-                    Map<String, String> wheres = new HashMap<>();
-                    wheres.putAll(oneRow.getKey());
-                    wheres.remove("timestamp");
-                    String selectSql = createSelectTimestampSQL(tableName, wheres);
-
-                    String selectTime = metricDao.selectTimestamp(selectSql);
-                    selectCnt++;
-
-                    if(selectTime != null && selectTime.length() > 0){
-                        LocalDateTime oldDt = LocalDateTime.parse(selectTime, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS"));
-                        LocalDateTime rowDt = LocalDateTime.parse(rowTimestamp, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS"));
-
-                        // 기존 DB에 등록된 시간보다 크다면 Update 진행
-                        if(oldDt.isBefore(rowDt)) {
-
-                            // UPDATE 할 값에 현재 데이터의 timestamp 값도 추가
-                            Map<String, String> oneRowVals = new HashMap<>();
-                            oneRowVals.putAll(oneRow.getValue());
-                            oneRowVals.put("timestamp", rowTimestamp);
-                            wheres.put("timestamp", selectTime);
-                            String sql = createUpdateSQL(tableName, oneRowVals, wheres);
-
-                            metricDao.executeQuery(sql);
-                            updateCnt++;
-//                            logger.info("update 쿼리 : " + sql);
-                        }
-
-                    // 같은 key를 가진 로우가 없다면 새로 Insert 진행
-                    } else {
-
-                        Map<String,String> oneRowVals = new HashMap<>();
-                        oneRowVals.putAll(oneRow.getKey());
-                        oneRowVals.put("timestamp", rowTimestamp); // 날짜 형식 변환
-                        oneRowVals.putAll(oneRow.getValue());
-                        String sql = createInsertSQL(tableName, oneRowVals);
-
-                        metricDao.executeQuery(sql);
-                        insertCnt++;
-//                        logger.info("insert 쿼리 : " + sql);
+                // 같은 키(tableName, system_seq, process_seq, dynamic_colName)가 이미 있으면
+                String oldTime = resKey.get(anotherKey);
+                if(oldTime!= null && oldTime.length() > 0) {
+                    // 날짜 비교해서 최신것이 아니면 패스
+                    LocalDateTime oldDt = LocalDateTime.parse(oldTime, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS"));
+                    LocalDateTime newDt = LocalDateTime.parse(timestamp, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS"));
+                    if(oldDt.isAfter(newDt)) {
+                        passCnt++;
+                        continue;
                     }
-
                 }
+                resKey.put(anotherKey, timestamp);
             }
 
+            // 결정한 키에 해당하는 값들 UPSERT
+            for(Map.Entry<String,String> keys : resKey.entrySet()) {
+                String timestamp = keys.getValue();
+
+                String[] keyArr = keys.getKey().split(",");
+                String tableName = keyArr[0];
+                String key = tableName+","+keyArr[1]+","+keyArr[2];
+                key += ","+ timestamp;
+                if(keyArr.length>3) key += "," + keyArr[3];
+
+                // SELECT SQL 생성
+                String selectSql = "";
+                selectSql += "SELECT SUBSTRING(date_format(timestamp, '%Y-%m-%d %H:%i:%S.%f'),1,23) timestamp";
+                selectSql += " FROM " + tableName + " WHERE system_seq = " + keyArr[1] + " AND process_seq = " + keyArr[2];
+                if(keyArr.length>3)
+                    selectSql += ", " + tableConfigs.get(tableName).getDynamic_classify_column_name() + "=" + keyArr[3];
+                selectSql += " ORDER BY timestamp DESC LIMIT 1";
+                // SELECT 수행
+                String selectTime = metricDao.selectTimestamp(selectSql);
+                selectCnt++;
+
+                // UPSERT
+                List<String> colNameList = colsConfig.get(tableName);
+                String[] colValList = metrics.get(key);
+                if(selectTime != null && selectTime.length() > 0) {
+                    LocalDateTime oldDt = LocalDateTime.parse(selectTime, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS"));
+                    LocalDateTime rowDt = LocalDateTime.parse(timestamp, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS"));
+
+                    // 기존 DB에 등록된 시간보다 크다면 Update 진행
+                    if (!oldDt.isAfter(rowDt)) {
+                        // 같은 시간이 있다면 null 이 아닌것만 update
+                        // 이후 시간이라면 전체 value 모두 update
+                        boolean allUpdate = true;
+                        if(oldDt.isEqual(rowDt)) allUpdate = false;
+                        String updateSql = "";
+                        updateSql += "UPDATE " + tableName + " SET ";
+                        for(int i = 0; i < colNameList.size() ; i++) {
+                            if(allUpdate || colValList[i] != null) {
+                                updateSql += " `" + colNameList.get(i) + "`= ";
+                                updateSql += (colValList[i] == null )? colValList[i] : "'" + colValList[i] +"'";
+                                updateSql += ",";
+                            }
+                        }
+                        updateSql = updateSql.substring(0, updateSql.length() - 1);
+                        updateSql += " WHERE system_seq = " + keyArr[1] + " AND process_seq = " + keyArr[2];
+
+                        metricDao.executeQuery(updateSql);
+                        updateCnt++;
+                    }
+
+                // 같은 key를 가진 로우가 없다면 새로 Insert 진행
+                } else {
+                    String colNames ="";
+                    String colVals = "";
+                    for(int i = 0; i < colNameList.size() ; i++) {
+                        colNames +=  " `" + colNameList.get(i) + "`,";
+                        colVals +=  (colValList[i] == null)? colValList[i] +"," : "'" + colValList[i] + "',";
+                    }
+
+                    colNames = colNames.substring(0, colNames.length() -1);
+                    colVals = colVals.substring(0, colVals.length() -1);
+
+                    String insertSql = "INSERT INTO " + tableName + "(" + colNames +")"
+                            + "VALUES (" + colVals +")";
+
+                    metricDao.executeQuery(insertSql);
+                    insertCnt++;
+                }
+
+            }
+            logger.info("(UPDATE) 최신 데이터 아니여서 넘어간 개수: " + passCnt);
             logger.info("(UPDATE) select 시도 개수: " + selectCnt);
             logger.info("(UPDATE) update 개수: " + updateCnt);
             logger.info("(UPDATE) insert 개수: " + insertCnt);
 
-        } catch ( Exception e){
+        }  catch ( Exception e){
             logger.error("UPDATE 처리 실패", e);
 
-            logger.info("UPDATE 실패한 Metric 정보: \n" + metrics);
+            // 실패한 메트릭 정보 로그
+            logger.info("UPDATE 실패한 Metric 정보: \n" + getErrorMetricInfo(metrics));
+
         }
     }
 
     /**
-     * DB의 timestamp값 조회하는 쿼리문 생성
-     * 가장 최근 시간으로 조회
+     * 에러 로그 출력용
+     * 메트릭 정보 출력 메소드
      *
-     * @param tableName
-     * @param wheres 조회하려는 조건값
+     * @param metrics
      * @return
      */
-    private String createSelectTimestampSQL(String tableName, Map<String,String> wheres){
-        String selectSql ="";
-        try{
-            String where ="";
+    private String getErrorMetricInfo(Map<String, String[]> metrics){
+        String info ="";
+        Map<String, List<String>> colsConfig = getColumnsByTable();
 
-            // WHERE절에 사용될 구문 생성
-            for(Map.Entry<String,String> whereEntry: wheres.entrySet()){
-                String colName = whereEntry.getKey();
-                String colVal = whereEntry.getValue();
-                where +=  " `" + colName + "`='" + colVal +"' AND";
+        for(String keys : metrics.keySet()) {
+            String[] keyArr = keys.split(",");
+            List<String> colNameList = colsConfig.get(keyArr[0]);
+            String[] colValList= metrics.get(keys);
+            info += "테이블 명: " + keyArr[0] + "/  ";
+            for(int i = 0; i < colNameList.size() ; i++) {
+                info +=  colNameList.get(i) +":" + colValList[i] +',';
             }
-
-            where = where.substring(0, where.length() - 3);
-            selectSql = "SELECT SUBSTRING(date_format(timestamp, '%Y-%m-%d %H:%i:%S.%f'),1,23) timestamp" +
-                    " FROM " + tableName + " WHERE " + where + " ORDER BY timestamp DESC LIMIT 1";
-
-        } catch (Exception e){
-            logger.error("SELECT문 생성 실패", e);
+            info = info.substring(0, info.length()-1);
+            info += "\n";
         }
-
-        return selectSql;
-    }
-
-    /**
-     * UPDATE 쿼리문 생성 메소드
-     *
-     * @param tableName
-     * @param oneRowVals UPDATE 할 값들: Map<필드명, 필드값>
-     * @param wheres UPDATE WHERE 절에 들어갈 값들: Map<필드명, 필드값>
-     * @return
-     */
-    private String createUpdateSQL(String tableName, Map<String, String> oneRowVals, Map<String, String> wheres){
-        String sql = "";
-
-        try {
-            String values ="";
-            for(Map.Entry<String,String> valEntry: oneRowVals.entrySet()){
-                String colName = valEntry.getKey();
-                String colVal = valEntry.getValue();
-                values +=  " `" + colName + "`='" + colVal +"',";
-            }
-
-            String where ="";
-            for(Map.Entry<String,String> whereEntry: wheres.entrySet()){
-                String colName = whereEntry.getKey();
-                String colVal = whereEntry.getValue();
-                where +=  " `" + colName + "`='" + colVal +"' AND";
-            }
-
-            values = values.substring(0, values.length() - 1);
-            where = where.substring(0, where.length() - 3);
-
-            sql = "UPDATE " + tableName + " SET " + values + " WHERE " + where;
-
-        } catch (Exception e){
-            logger.error("UPDATE문 생성 실패", e);
-        }
-
-        return sql;
-    }
-
-    /**
-     * INSERT 쿼리문 생성 메소드
-     *
-     * @param tableName
-     * @param oneRowVals INSERT 할 값들 : Map<필드명, 필드값>
-     * @return
-     */
-    private String createInsertSQL(String tableName, Map<String, String> oneRowVals){
-        String sql = "";
-
-        try{
-            String colNames = "";
-            String colVals = "";
-
-            for(Map.Entry<String,String> keyEntry: oneRowVals.entrySet()){
-                String colName = keyEntry.getKey();
-                String colVal = keyEntry.getValue();
-                colNames +=  " `" + colName + "`,";
-                colVals +=  "'" + colVal +"',";
-            }
-
-            colNames = colNames.substring(0, colNames.length() -1);
-            colVals = colVals.substring(0, colVals.length() -1);
-
-            sql = "INSERT INTO " + tableName + "(" + colNames +")"
-                    + "VALUES (" + colVals +")";
-
-        } catch (Exception e){
-            logger.error("INSERT문 생성 실패", e);
-        }
-
-
-        return sql;
-    }
-
-    /**
-     * 완전한 SQL 문 생성 메소드
-     *
-     * @param tableName 테이블명
-     * @param colNameList 컬럼명 리스트
-     * @param colValList Bulk insert 구문 List< 한 로우에 들어가는 필드 List< Map<필드명, 필드값> >>
-     * @return 완전한 INSERT 구문
-     */
-    private String createInsertDuplicateSQL(String tableName, List<String> colNameList, List<List<Map<String, String>>> colValList){
-        String sql = "";
-        String values ="";
-        Set<String> duplicateKeySet = new HashSet();
-        String duplicateKeys ="";
-        try{
-            // INSERT 구문 생성 , VALUES () 전까지.
-            String columnNames = "";
-            for(String colName : colNameList){
-                columnNames +=  "`" + colName + "`,";
-            }
-            columnNames = columnNames.substring(0, columnNames.length()-1);
-
-            for(List<Map<String, String>> oneRow : colValList){
-                values += "(";
-
-                for(Map<String, String> nameVals : oneRow){
-                    for(Map.Entry<String, String> nameVal : nameVals.entrySet()){
-                        // VALUES 설정  ->  "'a', 'b', 'c', null, 'd'..."
-                        String value = nameVal.getValue();
-                        if("null".equals(value)){
-                            values += value + ",";
-                        } else {
-                            values += "'"+ value + "',";
-                            // null 이 아닌경우만 duplicateKey 설정
-                            duplicateKeySet.add("`" + nameVal.getKey() +"`");
-                        }
-                    }
-                }
-                values = values.substring(0, values.length()-1);
-                values += "),";
-            }
-
-            for(String dup: duplicateKeySet) duplicateKeys += dup + "=VALUES(" + dup + "),";
-            duplicateKeys = duplicateKeys.substring(0, duplicateKeys.length()-1);
-            values = values.substring(0, values.length()-1);
-
-            sql += "INSERT INTO " + tableName + "(" + columnNames + ")" + " VALUES " + values
-                    + " ON DUPLICATE KEY UPDATE " + duplicateKeys;
-
-        } catch (Exception e){
-            logger.error("Insert-Duplicate문 생성 실패", e);
-        }
-
-        return sql;
+        return info;
     }
 
     /**
@@ -510,107 +533,5 @@ public class DBProcessor {
         return columns;
     }
 
-
-    /**
-     * 테이블, key를 기준으로 SET 데이터들 집합시켜 Map형식으로 재배치
-     *
-     * @param metrics
-     * @return Map<테이블명, Map< Map<필드명, 값>, Map<필드명, 값> >>
-     *                                |                       |
-     *          키(sys_seq, proc_seq, timestamp 등)    값(일반 메트릭 값)
-     */
-    private Map<String, Map<Map<String,String>,Map<String,String>>> getMetricMapForSql(Set<MetricInfo> metrics) {
-        Map<String, Map<Map<String,String>,Map<String,String>>> resMetricMap = new HashMap<>();
-
-        for (MetricInfo metric : metrics) {
-            for (MetricConfig config : metricConfigs) {
-                try {
-                    boolean isMatch;
-                    Pattern metircNamePattern = null;
-
-                    // metric_name 패턴 일치 && table_name 일치
-                    if("Y".equals(config.getDynamic_flag())){
-                        metircNamePattern = Pattern.compile(config.getMetric_name());
-                        isMatch = metircNamePattern.matcher(metric.getMetric_name()).matches()
-                            && ("RRD".equals(metric.getTable_name()) || config.getTable_name().equals(metric.getTable_name()));
-                    // metric_name 일치 && table_name 일치
-                    } else {
-                        isMatch = config.getMetric_name().equals(metric.getMetric_name())
-                                && ("RRD".equals(metric.getTable_name()) || config.getTable_name().equals(metric.getTable_name()));
-                    }
-//
-                    if (isMatch) {
-                        // 수집 여부 = 'Y'
-                        if ("Y".equals(config.getCollect_flag())) {
-                            // ----------- 1. 키 설정 (system_seq, process_seq, timestamp + dynamic_classify_column_name)
-                            Map<String, String> keys = new HashMap<>();
-                            keys.put("system_seq", metric.getSystem_seq());
-                            keys.put("process_seq", metric.getProcess_seq());
-                            keys.put("timestamp", metric.getTimestamp());
-                            // 동적 필드인 경우 구분명 추출
-                            if ("Y".equals(config.getDynamic_flag())) {
-                                String dynamicColName = tableConfigs.get(config.getTable_name()).getDynamic_classify_column_name();
-                                String dynamicColVal = "";
-                                Matcher matcher = metircNamePattern.matcher(metric.getMetric_name());
-                                while (matcher.find()) {
-                                    dynamicColVal = matcher.group(1);
-                                }
-                                keys.put(dynamicColName, dynamicColVal);
-                            }
-
-                            // ----------- 2. value 설정
-                            Map<String, String> values = new HashMap<>();
-                            String colName = config.getColumn_name();
-                            String metricValue = metric.getMetric_value();
-                            values.put(colName, metricValue);
-
-
-                            // ----------- 3. 결과로 반환할 map에 추가
-                            String tableName = config.getTable_name();
-
-                            // 같은 Key에 속한 값이 있는지 확인
-                            Map<Map<String, String>, Map<String, String>> keyVals = resMetricMap.get(tableName);
-                            // 해당 table name에 속한 데이터가 없다면 초기화
-                            if (keyVals == null || keyVals.size() == 0) {
-                                keyVals = new HashMap<>();
-
-                            } else {
-                                Map<String, String> oldValues = keyVals.get(keys);
-                                // 해당 key 값들에 속한 데이터가 이미 존재한다면
-                                if (oldValues != null && oldValues.size() > 0) {
-                                    // 합치기
-                                    values.putAll(oldValues);
-                                }
-                            }
-
-                            // 리턴할 값에 추가
-                            keyVals.put(keys, values);
-                            resMetricMap.put(tableName, keyVals);
-
-                        }
-                        break;
-                    }
-
-
-                } catch (Exception e){
-                    logger.error("Metrics 정보 -> 쿼리생성용 Map으로 변환 실패", e);
-
-                    // 실패한 메트릭 정보
-                    logger.error("가공 실패한 Metric 정보: \n" + metric);
-                }
-            }
-
-            /*logger.info("파싱 결과 >>>" );
-            for(String tableName : resMetricMap.keySet()){
-                logger.info("------------ " + tableName + "-------------");
-                for(Map.Entry<Map<String, String>, Map<String, String>> mm: resMetricMap.get(tableName).entrySet()){
-                    logger.info(String.valueOf(mm.getKey()));
-                    logger.info(String.valueOf(mm.getValue()));
-                }
-            }*/
-        }
-
-        return resMetricMap;
-    }
 
 }
