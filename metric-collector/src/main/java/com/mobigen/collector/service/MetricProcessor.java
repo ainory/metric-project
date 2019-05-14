@@ -73,9 +73,17 @@ public class MetricProcessor {
             Map<LocalDateTime, Set<MetricInfo>> popMetricMap = metricBuffer.popMetricMap();
 
             String[] timestamps = getSortedKeys(popMetricMap.keySet());
-            logger.info("처리하려는 Timestamp 정보: "
-                    +  timestamps[0]
-                    +" ~ " + timestamps[timestamps.length-1] );
+            if(timestamps.length > 0){
+                logger.info("처리하려는 Timestamp 정보: "
+                        +  timestamps[0]
+                        +" ~ " + timestamps[timestamps.length-1] );
+
+//                // 시작 timestamp 요소 확인
+//                SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
+//                Date parsedDate = dateFormat.parse(timestamps[0]);
+//                Timestamp timestamp = new java.sql.Timestamp(parsedDate.getTime());
+//                logger.info(String.valueOf(popMetricMap.get(timestamp.toLocalDateTime())));
+            }
 
             if(popMetricMap.size() > 0){
                 for( Set<MetricInfo> val :  popMetricMap.values()){
